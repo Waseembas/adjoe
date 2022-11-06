@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: Service
+metadata:
+  creationTimestamp: "2022-11-06T11:37:23Z"
+  labels:
+    App: ScalableNginxExample
+  name: nginx-example
+  namespace: default
+  resourceVersion: "276013"
+  uid: d802e89c-706f-4050-9905-1e895bcaebc4
+spec:
+  clusterIP: 10.245.97.192
+  clusterIPs:
+  - 10.245.97.192
+  externalTrafficPolicy: Cluster
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - nodePort: 30080
+    port: 80
+    protocol: TCP
+    targetPort: 80
+  selector:
+    App: ScalableNginxExample
+  sessionAffinity: None
+  type: NodePort
+status:
+  loadBalancer: {}

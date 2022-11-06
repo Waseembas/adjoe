@@ -1,0 +1,4 @@
+#host                   = "https://a4562b1a-6bee-4c0d-bbe6-12d79b73f74f.k8s.ondigitalocean.com"
+#client_certificate     = ""
+#client_key             = ""
+#cluster_ca_certificate = ""
