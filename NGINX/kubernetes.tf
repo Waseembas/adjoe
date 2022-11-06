@@ -29,5 +29,5 @@ terraform {
 
 provider "kubernetes" {
   config_path    = "~/.kube/config"
-  config_context = "do-sfo3-k8s-1-24-4-do-0-sfo3-1667661477975"
+  config_context = "do-sfo3-k8s-1-24-4-do-0-sfo3-1667661477975X"
 }
