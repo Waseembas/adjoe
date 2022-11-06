@@ -1,0 +1,514 @@
+---
+# Source: elasticsearch/templates/client-serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    app: elasticsearch
+    chart: elasticsearch-1.32.5
+    component: "client"
+    heritage: Helm
+    release: release-name
+  name: release-name-elasticsearch-client
+---
+# Source: elasticsearch/templates/data-serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    app: elasticsearch
+    chart: elasticsearch-1.32.5
+    component: "data"
+    heritage: Helm
+    release: release-name
+  name: release-name-elasticsearch-data
+---
+# Source: elasticsearch/templates/master-serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    app: elasticsearch
+    chart: elasticsearch-1.32.5
+    component: "master"
+    heritage: Helm
+    release: release-name
+  name: release-name-elasticsearch-master
+---
+# Source: elasticsearch/templates/configmap.yaml
+apiVersion: v1,/.
+
+;;
+kind: ConfigMap
+metadata:
+  name: release-name-elasticsearch
+  labels:
+    app: release-name-elasticsearch
+    chart: "elasticsearch-1.32.5"
+    release: "release-name"
+    heritage: "Helm"
+data:
+  elasticsearch.yml: |-
+    cluster.name: elasticsearch
+
+    node.data: ${NODE_DATA:true}
+    node.master: ${NODE_MASTER:true}
+    node.ingest: ${NODE_INGEST:true}
+    node.name: ${HOSTNAME}
+    network.host: 0.0.0.0
+    # see https://github.com/kubernetes/kubernetes/issues/3595
+    bootstrap.memory_lock: ${BOOTSTRAP_MEMORY_LOCK:false}
+
+    discovery:
+      zen:
+        ping.unicast.hosts: ${DISCOVERY_SERVICE:}
+        minimum_master_nodes: ${MINIMUM_MASTER_NODES:2}
+
+    # see https://github.com/elastic/elasticsearch-definitive-guide/pull/679
+    processors: ${PROCESSORS:}
+
+    # avoid split-brain w/ a minimum consensus of two masters plus a data node
+    gateway.expected_master_nodes: ${EXPECTED_MASTER_NODES:2}
+    gateway.expected_data_nodes: ${EXPECTED_DATA_NODES:1}
+    gateway.recover_after_time: ${RECOVER_AFTER_TIME:5m}
+    gateway.recover_after_master_nodes: ${RECOVER_AFTER_MASTER_NODES:2}
+    gateway.recover_after_data_nodes: ${RECOVER_AFTER_DATA_NODES:1}
+  log4j2.properties: |-
+    status = error
+    appender.console.type = Console
+    appender.console.name = console
+    appender.console.layout.type = PatternLayout
+    appender.console.layout.pattern = [%d{ISO8601}][%-5p][%-25c{1.}] %marker%m%n
+    rootLogger.level = info
+    rootLogger.appenderRef.console.ref = console
+    logger.searchguard.name = com.floragunn
+    logger.searchguard.level = info
+    
+---
+# Source: elasticsearch/templates/tests/test-configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: release-name-elasticsearch-test
+  labels:
+    app: release-name-elasticsearch
+    chart: "elasticsearch-1.32.5"
+    heritage: "Helm"
+    release: "release-name"
+data:
+  run.sh: |-
+    @test "Test Access and Health" {
+      curl -D - http://release-name-elasticsearch-client:9200
+      curl -D - http://release-name-elasticsearch-client:9200/_cluster/health?wait_for_status=green
+    }
+---
+# Source: elasticsearch/templates/client-svc.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: elasticsearch
+    chart: elasticsearch-1.32.5
+    component: "client"
+    heritage: Helm
+    release: release-name
+  name: release-name-elasticsearch-client
+
+spec:
+  ports:
+    - name: http
+      port: 9200
+      targetPort: http
+  selector:
+    app: elasticsearch
+    component: "client"
+    release: release-name
+  type: NodePort
+   #type: ClusterIP
+---
+# Source: elasticsearch/templates/master-svc.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: elasticsearch
+    chart: elasticsearch-1.32.5
+    component: "master"
+    heritage: Helm
+    release: release-name
+  name: release-name-elasticsearch-discovery
+spec:
+  clusterIP: None
+  ports:
+    - port: 9300
+      targetPort: transport
+  selector:
+    app: elasticsearch
+    component: "master"
+    release: release-name
+---
+# Source: elasticsearch/templates/client-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: elasticsearch
+    chart: elasticsearch-1.32.5
+    component: "client"
+    heritage: Helm
+    release: release-name
+  name: release-name-elasticsearch-client
+spec:
+  selector:
+    matchLabels:
+      app: elasticsearch
+      component: "client"
+      release: release-name
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: elasticsearch
+        component: "client"
+        release: release-name
+      annotations:
+        checksum/config: 016be46c36e92dde7cf304459972af1dd2a6cd45cd0b1c38b0853fb3702968ff
+    spec:
+      serviceAccountName: release-name-elasticsearch-client
+      securityContext:
+        fsGroup: 1000
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 1
+            podAffinityTerm:
+              topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: "elasticsearch"
+                  release: "release-name"
+                  component: "client"
+      initContainers:
+      # see https://www.elastic.co/guide/en/elasticsearch/reference/current/vm-max-map-count.html
+      # and https://www.elastic.co/guide/en/elasticsearch/reference/current/setup-configuration-memory.html#mlockall
+      - name: "sysctl"
+        image: "busybox:latest"
+        imagePullPolicy: "Always"
+        resources:
+            {}
+        command: ["sysctl", "-w", "vm.max_map_count=262144"]
+        securityContext:
+          privileged: true
+      containers:
+      - name: elasticsearch
+        env:
+        - name: NODE_DATA
+          value: "false"
+        - name: NODE_MASTER
+          value: "false"
+        - name: DISCOVERY_SERVICE
+          value: release-name-elasticsearch-discovery
+        - name: PROCESSORS
+          valueFrom:
+            resourceFieldRef:
+              resource: limits.cpu
+        - name: ES_JAVA_OPTS
+          value: "-Djava.net.preferIPv4Stack=true -Xms512m -Xmx512m  "
+        - name: MINIMUM_MASTER_NODES
+          value: "2"
+        resources:
+            limits:
+              cpu: "1"
+            requests:
+              cpu: 25m
+              memory: 512Mi
+        readinessProbe:
+          httpGet:
+            path: /_cluster/health
+            port: 9200
+          initialDelaySeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /_cluster/health?local=true
+            port: 9200
+          initialDelaySeconds: 90
+        image: "elasticsearch:7.17.7"
+        imagePullPolicy: "IfNotPresent"
+        ports:
+        - containerPort: 9200
+          name: http
+        - containerPort: 9300
+          name: transport
+        volumeMounts:
+        - mountPath: /usr/share/elasticsearch/config/elasticsearch.yml
+          name: config
+          subPath: elasticsearch.yml
+      volumes:
+      - name: config
+        configMap:
+          name: release-name-elasticsearch
+---
+# Source: elasticsearch/templates/data-statefulset.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    app: elasticsearch
+    chart: elasticsearch-1.32.5
+    component: "data"
+    heritage: Helm
+    release: release-name
+  name: release-name-elasticsearch-data
+spec:
+  selector:
+    matchLabels:
+      app: elasticsearch
+      component: "data"
+      release: release-name
+      role: data
+  serviceName: release-name-elasticsearch-data
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: elasticsearch
+        component: "data"
+        release: release-name
+        role: data
+    spec:
+      serviceAccountName: release-name-elasticsearch-data
+      securityContext:
+        fsGroup: 1000
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 1
+            podAffinityTerm:
+              topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: "elasticsearch"
+                  release: "release-name"
+                  component: "data"
+      initContainers:
+      # see https://www.elastic.co/guide/en/elasticsearch/reference/current/vm-max-map-count.html
+      # and https://www.elastic.co/guide/en/elasticsearch/reference/current/setup-configuration-memory.html#mlockall
+      - name: "sysctl"
+        image: "busybox:latest"
+        imagePullPolicy: "Always"
+        resources:
+            {}
+        command: ["sysctl", "-w", "vm.max_map_count=262144"]
+        securityContext:
+          privileged: true
+      - name: "chown"
+        image: "elasticsearch:7.17.7"
+        imagePullPolicy: "IfNotPresent"
+        resources:
+            {}
+        command:
+        - /bin/bash
+        - -c
+        - >
+          set -e;
+          set -x;
+          chown elasticsearch:elasticsearch /usr/share/elasticsearch/data;
+          for datadir in $(find /usr/share/elasticsearch/data -mindepth 1 -maxdepth 1 -not -name ".snapshot"); do
+            chown -R elasticsearch:elasticsearch $datadir;
+          done;
+          chown elasticsearch:elasticsearch /usr/share/elasticsearch/logs;
+          for logfile in $(find /usr/share/elasticsearch/logs -mindepth 1 -maxdepth 1 -not -name ".snapshot"); do
+            chown -R elasticsearch:elasticsearch $logfile;
+          done
+        securityContext:
+          runAsUser: 0
+        volumeMounts:
+        - mountPath: /usr/share/elasticsearch/data
+          name: data
+      containers:
+      - name: elasticsearch
+        env:
+        - name: DISCOVERY_SERVICE
+          value: release-name-elasticsearch-discovery
+        - name: NODE_MASTER
+          value: "false"
+        - name: PROCESSORS
+          valueFrom:
+            resourceFieldRef:
+              resource: limits.cpu
+        - name: ES_JAVA_OPTS
+          value: "-Djava.net.preferIPv4Stack=true -Xms1536m -Xmx1536m  "
+        - name: MINIMUM_MASTER_NODES
+          value: "2"
+        image: "elasticsearch:7.17.7"
+        imagePullPolicy: "IfNotPresent"
+        ports:
+        - containerPort: 9300
+          name: transport
+
+        resources:
+            limits:
+              cpu: "1"
+            requests:
+              cpu: 25m
+              memory: 1536Mi
+        readinessProbe:
+          httpGet:
+            path: /_cluster/health?local=true
+            port: 9200
+          initialDelaySeconds: 5
+        volumeMounts:
+        - mountPath: /usr/share/elasticsearch/data
+          name: data
+        - mountPath: /usr/share/elasticsearch/config/elasticsearch.yml
+          name: config
+          subPath: elasticsearch.yml
+      terminationGracePeriodSeconds: 3600
+      volumes:
+      - name: config
+        configMap:
+          name: release-name-elasticsearch
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: OnDelete
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes:
+        - "ReadWriteOnce"
+      resources:
+        requests:
+          storage: "30Gi"
+---
+# Source: elasticsearch/templates/master-statefulset.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    app: elasticsearch
+    chart: elasticsearch-1.32.5
+    component: "master"
+    heritage: Helm
+    release: release-name
+  name: release-name-elasticsearch-master
+spec:
+  selector:
+    matchLabels:
+      app: elasticsearch
+      component: "master"
+      release: release-name
+      role: master
+  serviceName: release-name-elasticsearch-master
+  replicas: 2
+  template:
+    metadata:
+      labels:
+        app: elasticsearch
+        component: "master"
+        release: release-name
+        role: master
+    spec:
+      serviceAccountName: release-name-elasticsearch-master
+      securityContext:
+        fsGroup: 1000
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 1
+            podAffinityTerm:
+              topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: "elasticsearch"
+                  release: "release-name"
+                  component: "master"
+      initContainers:
+      # see https://www.elastic.co/guide/en/elasticsearch/reference/current/vm-max-map-count.html
+      # and https://www.elastic.co/guide/en/elasticsearch/reference/current/setup-configuration-memory.html#mlockall
+      - name: "sysctl"
+        image: "busybox:latest"
+        imagePullPolicy: "Always"
+        resources:
+            {}
+        command: ["sysctl", "-w", "vm.max_map_count=262144"]
+        securityContext:
+          privileged: true
+      - name: "chown"
+        image: "elasticsearch:7.17.7"
+        imagePullPolicy: "IfNotPresent"
+        resources:
+            {}
+        command:
+        - /bin/bash
+        - -c
+        - >
+          set -e;
+          set -x;
+          chown elasticsearch:elasticsearch /usr/share/elasticsearch/data;
+          for datadir in $(find /usr/share/elasticsearch/data -mindepth 1 -maxdepth 1 -not -name ".snapshot"); do
+            chown -R elasticsearch:elasticsearch $datadir;
+          done;
+          chown elasticsearch:elasticsearch /usr/share/elasticsearch/logs;
+          for logfile in $(find /usr/share/elasticsearch/logs -mindepth 1 -maxdepth 1 -not -name ".snapshot"); do
+            chown -R elasticsearch:elasticsearch $logfile;
+          done
+        securityContext:
+          runAsUser: 0
+        volumeMounts:
+        - mountPath: /usr/share/elasticsearch/data
+          name: data
+      containers:
+      - name: elasticsearch
+        env:
+        - name: NODE_DATA
+          value: "false"
+        - name: DISCOVERY_SERVICE
+          value: release-name-elasticsearch-discovery
+        - name: PROCESSORS
+          valueFrom:
+            resourceFieldRef:
+              resource: limits.cpu
+        - name: ES_JAVA_OPTS
+          value: "-Djava.net.preferIPv4Stack=true -Xms512m -Xmx512m  "
+        - name: MINIMUM_MASTER_NODES
+          value: "2"
+        resources:
+            limits:
+              cpu: "1"
+            requests:
+              cpu: 25m
+              memory: 512Mi
+        readinessProbe:
+          httpGet:
+            path: /_cluster/health?local=true
+            port: 9200
+          initialDelaySeconds: 5
+        image: "elasticsearch:7.17.7"
+        imagePullPolicy: "IfNotPresent"
+        ports:
+        - containerPort: 9300
+          name: transport
+
+        volumeMounts:
+        - mountPath: /usr/share/elasticsearch/data
+          name: data
+        - mountPath: /usr/share/elasticsearch/config/elasticsearch.yml
+          name: config
+          subPath: elasticsearch.yml
+      volumes:
+      - name: config
+        configMap:
+          name: release-name-elasticsearch
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: OnDelete
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes:
+        - "ReadWriteOnce"
+      resources:
+        requests:
+          storage: "4Gi"
